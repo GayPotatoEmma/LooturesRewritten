@@ -24,9 +24,12 @@ internal static class PlayerNames
     {
         foreach (var world in WorldNames.Value)
         {
-            if (playerName.EndsWith(world, StringComparison.OrdinalIgnoreCase))
-                return playerName[..^world.Length].TrimEnd();
+            if (playerName.EndsWith($" {world}", StringComparison.OrdinalIgnoreCase))
+            {
+                return playerName[..^(world.Length + 1)].TrimEnd();
+            }
         }
+
         return playerName;
     }
 }
