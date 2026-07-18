@@ -1,10 +1,12 @@
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
-using System.IO;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using KamiToolKit;
+using LooturesRewritten.Services;
 using LooturesRewritten.Windows;
+using Lumina.Text.ReadOnly;
 
 namespace LooturesRewritten;
 
@@ -17,70 +19,84 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
+    [PluginService] internal static IPartyList PartyList { get; private set; } = null!;
+    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
 
-    private const string CommandName = "/pmycommand";
+    private const string CommandName = "/lootures";
+    private const string ClearCommandName = "/lootclear";
 
     public Configuration Configuration { get; init; }
 
     public readonly WindowSystem WindowSystem = new("LooturesRewritten");
-    private ConfigWindow ConfigWindow { get; init; }
-    private MainWindow MainWindow { get; init; }
+
+    private LootTracker LootTracker { get; init; }
+    private RollChatListener RollChatListener { get; init; }
+    private LootRollAddon LootRollAddon { get; init; }
+    private NeedOrGreedOverlay NeedOrGreedOverlay { get; init; }
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
-        // You might normally want to embed resources and load them from the manifest stream
-        var goatImagePath = Path.Combine(PluginInterface.AssemblyLocation.Directory?.FullName!, "goat.png");
+        KamiToolKitLibrary.Initialize(PluginInterface, "Lootures Rewritten");
 
-        ConfigWindow = new ConfigWindow(this);
-        MainWindow = new MainWindow(this, goatImagePath);
+        LootTracker = new LootTracker(Framework, PartyList, AddonLifecycle);
+        RollChatListener = new RollChatListener(ChatGui, PartyList, LootTracker);
 
-        WindowSystem.AddWindow(ConfigWindow);
-        WindowSystem.AddWindow(MainWindow);
+        LootRollAddon = new LootRollAddon(LootTracker, PartyList)
+        {
+            InternalName = "LooturesRollWindow",
+            Title = new ReadOnlySeString("Loot Rolls"),
+        };
+
+        NeedOrGreedOverlay = new NeedOrGreedOverlay(LootRollAddon);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "A useful message to display in /xlhelp"
+            HelpMessage = "Toggle the Lootures loot roll window"
         });
 
-        // Tell the UI system that we want our windows to be drawn through the window system
+        CommandManager.AddHandler(ClearCommandName, new CommandInfo(OnClearCommand)
+        {
+            HelpMessage = "Clear all tracked loot rolls"
+        });
+
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
-
-        // This adds a button to the plugin installer entry of this plugin which allows
-        // toggling the display status of the configuration ui
-        PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
-
-        // Adds another button doing the same but for the main ui of the plugin
-        PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
-
-        // Add a simple message to the log with level set to information
-        // Use /xllog to open the log window in-game
-        // Example Output: 00:57:54.959 | INF | [SamplePlugin] ===A cool log message from Sample Plugin===
-        Log.Information($"===A cool log message from {PluginInterface.Manifest.Name}===");
+        PluginInterface.UiBuilder.OpenMainUi += ToggleLootWindow;
     }
 
     public void Dispose()
     {
-        // Unregister all actions to not leak anything during disposal of plugin
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
-        PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
-        
+        PluginInterface.UiBuilder.OpenMainUi -= ToggleLootWindow;
+
         WindowSystem.RemoveAllWindows();
 
-        ConfigWindow.Dispose();
-        MainWindow.Dispose();
+        if (LootRollAddon.IsOpen)
+            LootRollAddon.Close();
+        NeedOrGreedOverlay.Dispose();
+        RollChatListener.Dispose();
+        LootTracker.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
+        CommandManager.RemoveHandler(ClearCommandName);
+
+        KamiToolKitLibrary.Dispose();
     }
 
-    private void OnCommand(string command, string args)
+    private void OnCommand(string command, string args) => ToggleLootWindow();
+
+    private void OnClearCommand(string command, string args) => LootTracker.Clear();
+
+    public void ToggleLootWindow()
     {
-        // In response to the slash command, toggle the display status of our main ui
-        MainWindow.Toggle();
+        if (LootRollAddon.IsOpen)
+            LootRollAddon.Close();
+        else
+            LootRollAddon.Open();
     }
-    
-    public void ToggleConfigUi() => ConfigWindow.Toggle();
-    public void ToggleMainUi() => MainWindow.Toggle();
 }
+
